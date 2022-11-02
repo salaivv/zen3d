@@ -66,8 +66,8 @@ def convert(
     config = _get_config(app_dir)
 
     if input_model.suffix == '.blend':
-        subprocess.run([config['blender'], str(input_model),
-                       '-b', '-P', _get_converter('blender')])
+        subprocess.run([config['blender'], str(input_model), '-b', '-P',
+                       _get_converter('blender'), '--', str(resolution), output_model])
 
     # print(f"Done converting {input_model.name}.")
     # print(f"Output saved to {output_model}.")
