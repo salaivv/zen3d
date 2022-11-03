@@ -1,25 +1,34 @@
 import sys
 import bpy
 from bpy import ops, data, context
-from bpy.types import Material
+from collections.abc import Iterator
+from pathlib import Path
 from pprint import pprint
 
 
 # sys.argv[6] is bake resolution
 # sys.argb[7] is output GLB path
 
-def get_material_output(node_tree):
-    node_material_output = None
+
+def setup_bake_settings(samples: int = 16):
+    context.scene.render.engine = 'CYCLES'
+    context.scene.cycles.device = 'GPU'
+    context.scene.cycles.samples = samples
+    context.scene.cycles.bake_type = 'EMIT'
+
+
+def get_node_of_type(node_tree, node_type):
+    node_of_type = None
 
     for node in node_tree.nodes:
-        if node.type == 'OUTPUT_MATERIAL':
-            node_material_output = node
+        if node.type == node_type:
+            node_of_type = node
             break
     
-    return node_material_output
+    return node_of_type
 
 
-def requires_bake(material) -> bool:
+def requires_bake(material):
     """
     Checks if a given material needs to be baked.
 
@@ -30,7 +39,7 @@ def requires_bake(material) -> bool:
     
     node_tree = material.node_tree
 
-    node_material_output = get_material_output(node_tree)
+    node_material_output = get_node_of_type(node_tree, 'OUTPUT_MATERIAL')
 
     node_principled = node_material_output.inputs["Surface"].links[0].from_node
 
@@ -54,12 +63,11 @@ def get_mesh_objects():
             yield obj
 
 
-def get_bake_materials() -> list[Material]:
+def get_bake_materials():
     """
     Get all materials that require baking.
     """
     to_bake = []
-    materials_used = []
 
     for material in data.materials:
         if material.users > 0:
@@ -70,7 +78,7 @@ def get_bake_materials() -> list[Material]:
 
 
 def add_bake_node(node_tree):
-    node_material_output = get_material_output(node_tree)
+    node_material_output = get_node_of_type(node_tree, 'OUTPUT_MATERIAL')
 
     node_bake_image = node_tree.nodes.new("ShaderNodeTexImage")
     node_bake_image.location[0] = node_material_output.location[0] + 300
@@ -87,13 +95,14 @@ def deselect_all_nodes(node_tree):
 def main(bake_resolution, glb_output_path):
     # Ensure Object mode
     if context.mode != 'OBJECT':
-        ops.object.editmode_toggle()
+        ops.object.mode_set(mode='OBJECT')
 
     materials_to_bake = get_bake_materials()
     # pprint(to_bake)
 
     ops.object.select_all(action='SELECT')
     ops.object.convert(target='MESH')
+    ops.object.select_all(action='DESELECT')
 
     # Add a target UV map for baking
     for mesh_obj in get_mesh_objects():
@@ -101,8 +110,9 @@ def main(bake_resolution, glb_output_path):
         mesh_obj.data.uv_layers.new(name="ZenBakeTarget")
         mesh_obj.data.uv_layers.active = mesh_obj.data.uv_layers["ZenBakeTarget"]
         # print(f"Active UV map: {mesh_obj.data.uv_layers.active.name}\n")
-    
-    ops.object.select_all(action='SELECT')  # select all objects
+        mesh_obj.select_set(True)
+        context.view_layer.objects.active = mesh_obj
+        
     ops.object.editmode_toggle()  # then switch to edit mode
     ops.mesh.select_all(action='DESELECT') # ensure nothing is selected
 
@@ -119,13 +129,19 @@ def main(bake_resolution, glb_output_path):
     # Smart UV project 
     ops.uv.smart_project()
 
+    # Create a new image and setup bake node for materials
     bake_image = data.images.new("bake_image", bake_resolution, bake_resolution)
+    
     for material in materials_to_bake:
         node_bake_image = add_bake_node(material.node_tree)
         node_bake_image.image = bake_image
         deselect_all_nodes(material.node_tree)
         node_bake_image.select = True
         material.node_tree.nodes.active = node_bake_image
+
+    setup_bake_settings()
+
+    ops.wm.save_mainfile(filepath=str(Path(glb_output_path).parent / "test_1.blend"))
 
 
 if __name__ == '__main__':
