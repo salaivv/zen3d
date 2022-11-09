@@ -1,16 +1,15 @@
-import sys
 import bpy
-from bpy import ops, data, context
-from collections.abc import Iterator
-from pathlib import Path
+import sys
 from pprint import pprint
+from pathlib import Path
+from collections.abc import Iterator
+from bpy import ops, data, context
+from bpy.types import (Object, Material, Image,
+                       ShaderNodeTree, ShaderNode,
+                       ShaderNodeTexImage)
 
 
-# sys.argv[6] is bake resolution
-# sys.argb[7] is output GLB path
-
-
-def setup_bake_settings(samples=16):
+def setup_bake_settings(samples: int = 16) -> None:
     context.scene.render.engine = 'CYCLES'
     context.scene.cycles.device = 'GPU'
     context.scene.cycles.samples = samples
@@ -21,7 +20,7 @@ def setup_bake_settings(samples=16):
     context.scene.cycles.denoising_prefilter = 'ACCURATE'
 
 
-def get_node_of_type(node_tree, node_type):
+def get_node_of_type(node_tree: ShaderNodeTree, node_type: str) -> ShaderNode:
     node_of_type = None
 
     for node in node_tree.nodes:
@@ -32,7 +31,7 @@ def get_node_of_type(node_tree, node_type):
     return node_of_type
 
 
-def requires_bake(material):
+def requires_bake(material: Material) -> bool:
     """
     Checks if a given material needs to be baked.
 
@@ -61,48 +60,51 @@ def requires_bake(material):
         return True
 
 
-def get_mesh_objects():
+def get_mesh_objects() -> Iterator[Object]:
     for obj in data.objects:
         if obj.type == 'MESH':
             yield obj
 
 
-def get_bake_materials():
+def get_bake_materials() -> Iterator[Material]:
     """
     Get all materials that require baking.
     """
-    to_bake = []
-
     for material in data.materials:
         if material.users > 0:
             if requires_bake(material):
-                to_bake.append(material)
-
-    return to_bake
+                yield material
 
 
-def deselect_nodes_all(node_tree):
+def deselect_nodes_all(node_tree: ShaderNodeTree) -> None:
     for node in node_tree.nodes:
         node.select = False
 
 
-def set_only_active_node(node_tree, node):
+def set_only_active_node(node_tree: ShaderNodeTree, node: ShaderNode) -> None:
     deselect_nodes_all(node_tree)
     node.select = True
     node_tree.nodes.active = node
 
 
-def add_bake_node(node_tree):
+def add_bake_node(node_tree: ShaderNodeTree) -> ShaderNodeTexImage:
     node_material_output = get_node_of_type(node_tree, 'OUTPUT_MATERIAL')
 
-    node_bake_image = node_tree.nodes.new("ShaderNodeTexImage")
-    node_bake_image.location[0] = node_material_output.location[0] + 300
-    node_bake_image.location[1] = node_material_output.location[1]
+    node_bake = node_tree.nodes.new("ShaderNodeTexImage")
+    node_bake.location[0] = node_material_output.location[0] + 300
+    node_bake.location[1] = node_material_output.location[1]
 
-    return node_bake_image
+    return node_bake
 
 
-def bake_principled_socket(materials, bake_image, socket_name, bake_dir, suffix):
+def bake_principled_socket(
+    materials: Iterator[Material],
+    bake_image: Image, socket_name: str,
+    bake_dir: str, suffix: str
+) -> None:
+    # TODO Determine if a socket needs baking.
+    # If none of the materials have anything connected to a socket
+    # then there's no need to bake that socket
 
     node_data = {}
 
@@ -175,12 +177,11 @@ def bake_principled_socket(materials, bake_image, socket_name, bake_dir, suffix)
                             node_tree_data['node_material_output'].inputs['Surface'])
 
 
-def main(bake_resolution, glb_output_path):
+def main(bake_resolution: int, glb_output_path: str) -> None:
     # Ensure Object mode
     if context.mode != 'OBJECT':
         ops.object.mode_set(mode='OBJECT')
 
-    materials_to_bake = get_bake_materials()
     # pprint(to_bake)
 
     ops.object.select_all(action='SELECT')
@@ -205,7 +206,7 @@ def main(bake_resolution, glb_output_path):
         context.view_layer.objects.active = mesh_obj
 
         for slot in context.active_object.material_slots:
-            if slot.material and slot.material in materials_to_bake:
+            if slot.material and slot.material in get_bake_materials():
                 context.active_object.active_material_index = slot.slot_index
                 ops.object.material_slot_select()
 
@@ -219,14 +220,14 @@ def main(bake_resolution, glb_output_path):
 
     bake_dir = str(Path(glb_output_path).parent)
 
-    bake_principled_socket(materials_to_bake, bake_image, 'Base Color', bake_dir, 'ALBEDO')
-    bake_principled_socket(materials_to_bake, bake_image, 'Metallic', bake_dir, 'METAL')
-    bake_principled_socket(materials_to_bake, bake_image, 'Roughness', bake_dir, 'ROUGH')
+    bake_principled_socket(get_bake_materials(), bake_image, 'Base Color', bake_dir, 'ALBEDO')
+    bake_principled_socket(get_bake_materials(), bake_image, 'Metallic', bake_dir, 'METAL')
+    bake_principled_socket(get_bake_materials(), bake_image, 'Roughness', bake_dir, 'ROUGH')
 
     ops.wm.save_mainfile(filepath=str(Path(bake_dir) / "test_1.blend"))
 
 
 if __name__ == '__main__':
-    # pprint(list(bpy.data.objects))
-    # print(sys.argv)
+    # sys.argv[6] is bake resolution
+    # sys.argb[7] is output GLB path
     main(int(sys.argv[6]), sys.argv[7])
