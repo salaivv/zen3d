@@ -271,6 +271,8 @@ def main(bake_resolution: int, glb_output_path: str) -> None:
     baked_maps["Normal"] = bake_map(get_bake_materials(), bake_image,
                                     bake_dir, 'NORMAL', 'NORMAL')
 
+    ops.object.mode_set(mode='OBJECT')
+
     for material in get_bake_materials():
         # Remove all nodes except Principled and Material Output
         node_tree = material.node_tree
@@ -302,12 +304,15 @@ def main(bake_resolution: int, glb_output_path: str) -> None:
             to_socket = get_node_of_type(node_tree, 'BSDF_PRINCIPLED').inputs[baked_map_name]
             node_tree.links.new(from_socket, to_socket)
     
-    for obj in get_mesh_objects():
-        uv_layers = obj.data.uv_layers
+    for mesh_obj in get_mesh_objects():
+        uv_layers = mesh_obj.data.uv_layers
+        context.view_layer.objects.active = mesh_obj
         if 'ZenBakeTarget' in (uv_layer.name for uv_layer in uv_layers):
             for uv_layer in uv_layers:
                 if uv_layer.name != 'ZenBakeTarget':
-                    uv_layers.remove(uv_layer)
+                    uv_layer.active = True
+                    ops.mesh.uv_texture_remove()
+                    # uv_layers.remove(uv_layer)
 
     gltf_output_path = os.path.splitext(glb_output_path)[0] + '.gltf'
     ops.export_scene.gltf(filepath=gltf_output_path, export_format='GLTF_SEPARATE')

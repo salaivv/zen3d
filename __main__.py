@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import typer
 import subprocess
 from pathlib import Path
@@ -65,11 +66,17 @@ def convert(
     config = _get_config(app_dir)
 
     if input_model.suffix == '.blend':
+        start = time.time()
+
         subprocess.run([config['blender'], str(input_model), '-b', '-P',
                        _get_converter('blender'), '--', str(resolution), output_model])
         
         gltf_path = os.path.splitext(output_model)[0] + '.gltf'
         subprocess.run([GLTF_PACK, '-i', gltf_path, '-o', output_model])
+
+        end = time.time()
+
+        print(f"\nDone conversion in {round(end - start)} seconds.\n")
 
     # print(f"Done converting {input_model.name}.")
     # print(f"Output saved to {output_model}.")
