@@ -6,7 +6,8 @@ from pathlib import Path
 
 
 APP_NAME = "zen3d"
-
+ZEN_PATH = Path(os.path.abspath(__file__)).parent
+GLTF_PACK = ZEN_PATH / 'tools' / 'gltfpack.exe'
 
 app = typer.Typer(add_completion=False)
 
@@ -29,10 +30,8 @@ def _get_config(app_dir):
 
 
 def _get_converter(app_name):
-    this_dir = Path(os.path.abspath(__file__)).parent
-
     if app_name == "blender":
-        converter = this_dir / "converters" / "blender.py"
+        converter = ZEN_PATH / "converters" / "blender.py"
 
     return str(converter)
 
@@ -68,6 +67,9 @@ def convert(
     if input_model.suffix == '.blend':
         subprocess.run([config['blender'], str(input_model), '-b', '-P',
                        _get_converter('blender'), '--', str(resolution), output_model])
+        
+        gltf_path = os.path.splitext(output_model)[0] + '.gltf'
+        subprocess.run([GLTF_PACK, '-i', gltf_path, '-o', output_model])
 
     # print(f"Done converting {input_model.name}.")
     # print(f"Output saved to {output_model}.")

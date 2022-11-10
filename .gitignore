@@ -2,3 +2,4 @@ env
 notes
 __pycache__
 config.json
+tools/*
