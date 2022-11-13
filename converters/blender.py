@@ -1,8 +1,11 @@
 import os
 import bpy
 import sys
+import subprocess
 from pprint import pprint
 from pathlib import Path
+from typing import Union
+from tempfile import TemporaryDirectory
 from collections.abc import Iterator
 from bpy import ops, data, context
 from bpy.types import (Object, Material, Image,
@@ -65,20 +68,24 @@ def requires_bake(material: Material) -> bool:
         return False
 
 
-def get_mesh_objects() -> Iterator[Object]:
+def get_mesh_objects() -> list[Object]:
+    mesh_objects = []
     for obj in data.objects:
         if obj.type == 'MESH':
-            yield obj
+            mesh_objects.append(obj)
+    return mesh_objects
 
 
-def get_bake_materials() -> Iterator[Material]:
+def get_bake_materials() -> list[Material]:
     """
     Get all materials that require baking.
     """
+    to_bake = []
     for material in data.materials:
         if material.users > 0:
             if requires_bake(material):
-                yield material
+                to_bake.append(material)
+    return to_bake
 
 
 def deselect_nodes_all(node_tree: ShaderNodeTree) -> None:
@@ -104,89 +111,94 @@ def add_bake_node(node_tree: ShaderNodeTree, bake_image: Image) -> ShaderNodeTex
 
 
 def bake_principled_socket(
-    materials: Iterator[Material],
+    materials: list[Material],
     bake_image: Image, bake_dir: str,
     socket_name: str, suffix: str
-) -> Image:
-    # TODO Determine if a socket needs baking.
-    # If none of the materials have anything connected to a socket
-    # then there's no need to bake that socket
+) -> Union[Image, None]:
 
-    node_data = {}
-
+    socket_requires_bake = False
     for material in materials:
-        node_tree = material.node_tree
-        node_bake = add_bake_node(node_tree, bake_image)
-        node_principled = get_node_of_type(node_tree, 'BSDF_PRINCIPLED')
-        node_material_output = get_node_of_type(node_tree, 'OUTPUT_MATERIAL')
-
-        # Add an Emission node
-        node_emission = node_tree.nodes.new('ShaderNodeEmission')
-
-        node_data[node_tree] = {
-            'node_bake': node_bake,
-            'node_principled': node_principled,
-            'node_material_output': node_material_output,
-            'node_emission': node_emission
-        }
-
-        # Find the socket connected to the given socket
-        socket = node_principled.inputs[socket_name]
-        from_socket = None
-
-        if socket.links:
-            from_socket = socket.links[0].from_socket
-        else:
-            node_color = None
-
-            if type(socket.default_value) == float:
-                node_color = node_tree.nodes.new('ShaderNodeValue')
-            else:
-                node_color = node_tree.nodes.new('ShaderNodeRGB')
-
-            node_color.outputs[0].default_value = socket.default_value
-            from_socket = node_color.outputs[0]
-            node_data[node_tree]['other'] = node_color
-
-        to_socket = node_emission.inputs['Color']
-
-        # Connect the found socket to the Emission Color input
-        node_tree.links.new(from_socket, to_socket)
-
-        # Connect the Emission BSDF output to the Surface input of Material Output
-        node_tree.links.new(node_emission.outputs[0], node_material_output.inputs['Surface'])
-
-        # Set the bake node as active and the only selected node
-        set_only_active_node(node_tree, node_bake)
-
-    # # Set the bake type to Emit
-    # context.scene.cycles.bake_type = 'EMIT'
-
-    # Bake map
-    ops.object.bake(type='EMIT')
-
-    # Save the image to the disk
-    bake_image_path = str(Path(bake_dir) / f"test_1_{suffix}.png")
-    bake_image.save_render(filepath=bake_image_path)
-
-    # Restore node tree to its original state
-    for node_tree, node_tree_data in node_data.items():
-        # Delete the emission node
-        node_tree.nodes.remove(node_tree_data['node_emission'])
-        node_tree.nodes.remove(node_tree_data['node_bake'])
-
-        if 'other' in node_tree_data.keys():
-            node_tree.nodes.remove(node_tree_data['other'])
-
-        # Connect Principled back to the material output node
-        node_tree.links.new(node_tree_data['node_principled'].outputs[0],
-                            node_tree_data['node_material_output'].inputs['Surface'])
+        node_principled = get_node_of_type(material.node_tree, 'BSDF_PRINCIPLED')
+        if node_principled.inputs[socket_name].links:
+            socket_requires_bake = True
+            break
     
-    return data.images.load(bake_image_path)
+    if socket_requires_bake:
+        node_data = {}
+
+        for material in materials:
+            node_tree = material.node_tree
+            node_bake = add_bake_node(node_tree, bake_image)
+            node_principled = get_node_of_type(node_tree, 'BSDF_PRINCIPLED')
+            node_material_output = get_node_of_type(node_tree, 'OUTPUT_MATERIAL')
+
+            # Add an Emission node
+            node_emission = node_tree.nodes.new('ShaderNodeEmission')
+
+            node_data[node_tree] = {
+                'node_bake': node_bake,
+                'node_principled': node_principled,
+                'node_material_output': node_material_output,
+                'node_emission': node_emission
+            }
+
+            # Find the socket connected to the given socket
+            socket = node_principled.inputs[socket_name]
+            from_socket = None
+
+            if socket.links:
+                from_socket = socket.links[0].from_socket
+            else:
+                node_color = None
+
+                if type(socket.default_value) == float:
+                    node_color = node_tree.nodes.new('ShaderNodeValue')
+                else:
+                    node_color = node_tree.nodes.new('ShaderNodeRGB')
+
+                node_color.outputs[0].default_value = socket.default_value
+                from_socket = node_color.outputs[0]
+                node_data[node_tree]['other'] = node_color
+
+            to_socket = node_emission.inputs['Color']
+
+            # Connect the found socket to the Emission Color input
+            node_tree.links.new(from_socket, to_socket)
+
+            # Connect the Emission BSDF output to the Surface input of Material Output
+            node_tree.links.new(node_emission.outputs[0], node_material_output.inputs['Surface'])
+
+            # Set the bake node as active and the only selected node
+            set_only_active_node(node_tree, node_bake)
+
+        # Bake map
+        ops.object.bake(type='EMIT')
+
+        # Save the image to the disk
+        bake_image_path = str(Path(bake_dir) / f"{Path(data.filepath).stem}_{suffix}.png")
+        bake_image.save_render(filepath=bake_image_path)
+
+        # Restore node tree to its original state
+        for node_tree, node_tree_data in node_data.items():
+            # Delete the emission node
+            node_tree.nodes.remove(node_tree_data['node_emission'])
+            node_tree.nodes.remove(node_tree_data['node_bake'])
+
+            if 'other' in node_tree_data.keys():
+                node_tree.nodes.remove(node_tree_data['other'])
+
+            # Connect Principled back to the material output node
+            node_tree.links.new(node_tree_data['node_principled'].outputs[0],
+                                node_tree_data['node_material_output'].inputs['Surface'])
+        
+        return data.images.load(bake_image_path)
+    
+    else:
+        return None
 
 
 def bake_map(
-    materials: Iterator[Material],
+    materials: list[Material],
     bake_image: Image, bake_dir: str,
     bake_type: str, suffix: str
 ) -> Image:
@@ -200,12 +212,10 @@ def bake_map(
         nodes_bake[node_tree] = node_bake
 
         set_only_active_node(node_tree, node_bake)
-    
-    # context.scene.cycles.bake_type = bake_type
 
     ops.object.bake(type=bake_type)
 
-    bake_image_path = str(Path(bake_dir) / f"test_1_{suffix}.png")
+    bake_image_path = str(Path(bake_dir) / f"{Path(data.filepath).stem}_{suffix}.png")
     bake_image.save_render(filepath=bake_image_path)
 
     for node_tree, node_bake in nodes_bake.items():
@@ -214,13 +224,17 @@ def bake_map(
     return data.images.load(bake_image_path)
 
 
-def main(bake_resolution: int, glb_output_path: str) -> None:
+def main(bake_resolution: int, glb_output_path: str, gltfpack: str) -> None:
+    bake_dir = TemporaryDirectory()
+
     # Ensure Object mode
     if context.mode != 'OBJECT':
         ops.object.mode_set(mode='OBJECT')
+    
+    mesh_objects = get_mesh_objects()
 
     # pprint(to_bake)
-    for mesh_obj in get_mesh_objects():
+    for mesh_obj in mesh_objects:
         context.view_layer.objects.active = mesh_obj
         break
 
@@ -229,7 +243,7 @@ def main(bake_resolution: int, glb_output_path: str) -> None:
     ops.object.select_all(action='DESELECT')
 
     # Add a target UV map for baking
-    for mesh_obj in get_mesh_objects():
+    for mesh_obj in mesh_objects:
         # print(f"Adding target UV map to {mesh_obj.name}")
         mesh_obj.data.uv_layers.new(name="ZenBakeTarget")
         mesh_obj.data.uv_layers.active = mesh_obj.data.uv_layers["ZenBakeTarget"]
@@ -240,15 +254,18 @@ def main(bake_resolution: int, glb_output_path: str) -> None:
     ops.object.editmode_toggle()  # then switch to edit mode
     ops.mesh.select_all(action='DESELECT')  # ensure nothing is selected
 
+    bake_materials = get_bake_materials()
+
     # Select parts of the meshes with materials that
     # require baking for unwrapping
-    for mesh_obj in get_mesh_objects():
+    for mesh_obj in mesh_objects:
         context.view_layer.objects.active = mesh_obj
 
         for slot in context.active_object.material_slots:
-            if slot.material and slot.material in get_bake_materials():
-                context.active_object.active_material_index = slot.slot_index
-                ops.object.material_slot_select()
+            if slot.material:
+                if slot.material in bake_materials:
+                    context.active_object.active_material_index = slot.slot_index
+                    ops.object.material_slot_select()
 
     # Smart UV project
     ops.uv.smart_project(angle_limit=1.151917, island_margin=0.005, area_weight=0.75)
@@ -258,22 +275,20 @@ def main(bake_resolution: int, glb_output_path: str) -> None:
 
     setup_bake_settings()
 
-    bake_dir = str(Path(glb_output_path).parent)
-
     baked_maps = { }
 
-    baked_maps["Base Color"] = bake_principled_socket(get_bake_materials(), bake_image,
-                                                      bake_dir, "Base Color", 'ALBEDO')
-    baked_maps["Metallic"] = bake_principled_socket(get_bake_materials(), bake_image,
-                                                    bake_dir, "Metallic", 'METAL')
-    baked_maps["Roughness"] = bake_principled_socket(get_bake_materials(), bake_image,
-                                                     bake_dir, "Roughness", 'ROUGH')
-    baked_maps["Normal"] = bake_map(get_bake_materials(), bake_image,
-                                    bake_dir, 'NORMAL', 'NORMAL')
+    baked_maps["Base Color"] = bake_principled_socket(bake_materials, bake_image,
+                                                      bake_dir.name, "Base Color", 'ALBEDO')
+    baked_maps["Metallic"] = bake_principled_socket(bake_materials, bake_image,
+                                                    bake_dir.name, "Metallic", 'METAL')
+    baked_maps["Roughness"] = bake_principled_socket(bake_materials, bake_image,
+                                                     bake_dir.name, "Roughness", 'ROUGH')
+    baked_maps["Normal"] = bake_map(bake_materials, bake_image,
+                                    bake_dir.name, 'NORMAL', 'NORMAL')
 
     ops.object.mode_set(mode='OBJECT')
 
-    for material in get_bake_materials():
+    for material in bake_materials:
         # Remove all nodes except Principled and Material Output
         node_tree = material.node_tree
         for node in node_tree.nodes:
@@ -282,29 +297,30 @@ def main(bake_resolution: int, glb_output_path: str) -> None:
 
         # Setup all baked maps 
         for baked_map_name, baked_map in baked_maps.items():
-            node_image_tex = node_tree.nodes.new("ShaderNodeTexImage")
-            node_image_tex.image = baked_map
-            
-            if not baked_map_name in ['Base Color']:
-                baked_map.colorspace_settings.name = 'Non-Color'
-            
-            if baked_map_name == 'Normal':
-                node_normal_map = node_tree.nodes.new('ShaderNodeNormalMap')
-                from_socket = node_image_tex.outputs[0]
-                to_socket = node_normal_map.inputs['Color']
-                node_tree.links.new(from_socket, to_socket)
+            if baked_map:
+                node_image_tex = node_tree.nodes.new("ShaderNodeTexImage")
+                node_image_tex.image = baked_map
+                
+                if not baked_map_name in ['Base Color']:
+                    baked_map.colorspace_settings.name = 'Non-Color'
+                
+                if baked_map_name == 'Normal':
+                    node_normal_map = node_tree.nodes.new('ShaderNodeNormalMap')
+                    from_socket = node_image_tex.outputs[0]
+                    to_socket = node_normal_map.inputs['Color']
+                    node_tree.links.new(from_socket, to_socket)
 
-                from_socket = node_normal_map.outputs[0]
+                    from_socket = node_normal_map.outputs[0]
+                    to_socket = get_node_of_type(node_tree, 'BSDF_PRINCIPLED').inputs[baked_map_name]
+                    node_tree.links.new(from_socket, to_socket)
+
+                    continue
+                
+                from_socket = node_image_tex.outputs[0]
                 to_socket = get_node_of_type(node_tree, 'BSDF_PRINCIPLED').inputs[baked_map_name]
                 node_tree.links.new(from_socket, to_socket)
-
-                continue
-            
-            from_socket = node_image_tex.outputs[0]
-            to_socket = get_node_of_type(node_tree, 'BSDF_PRINCIPLED').inputs[baked_map_name]
-            node_tree.links.new(from_socket, to_socket)
     
-    for mesh_obj in get_mesh_objects():
+    for mesh_obj in mesh_objects:
         uv_layers = mesh_obj.data.uv_layers
         context.view_layer.objects.active = mesh_obj
         if 'ZenBakeTarget' in (uv_layer.name for uv_layer in uv_layers):
@@ -314,13 +330,17 @@ def main(bake_resolution: int, glb_output_path: str) -> None:
                     ops.mesh.uv_texture_remove()
                     # uv_layers.remove(uv_layer)
 
-    gltf_output_path = os.path.splitext(glb_output_path)[0] + '.gltf'
+    gltf_output_name = os.path.splitext(Path(glb_output_path).name)[0] + '.gltf'
+    gltf_output_path = str(Path(bake_dir.name) / gltf_output_name)
     ops.export_scene.gltf(filepath=gltf_output_path, export_format='GLTF_SEPARATE')
 
-    ops.wm.save_mainfile(filepath=str(Path(bake_dir) / "test_1.blend"))
+    subprocess.run([gltfpack, '-i', gltf_output_path, '-o', glb_output_path])
+
+    # ops.wm.save_mainfile(filepath=str(Path(bake_dir) / "test_1.blend"))
 
 
 if __name__ == "__main__":
     # sys.argv[6] is bake resolution
     # sys.argb[7] is output GLB path
-    main(int(sys.argv[6]), sys.argv[7])
+    # sys.argb[8] is path to gltfpack
+    main(int(sys.argv[6]), sys.argv[7], sys.argv[8])

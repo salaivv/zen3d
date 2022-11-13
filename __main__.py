@@ -69,10 +69,7 @@ def convert(
         start = time.time()
 
         subprocess.run([config['blender'], str(input_model), '-b', '-P',
-                       _get_converter('blender'), '--', str(resolution), output_model])
-        
-        gltf_path = os.path.splitext(output_model)[0] + '.gltf'
-        subprocess.run([GLTF_PACK, '-i', gltf_path, '-o', output_model])
+                       _get_converter('blender'), '--', str(resolution), output_model, GLTF_PACK])
 
         end = time.time()
 
