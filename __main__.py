@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import time
 import typer
@@ -27,10 +28,13 @@ def _get_config():
     #     with open(config_path, "r") as f:
     #         config = json.load(f)
 
-    with open(Path(ZEN_PATH) / "config.json") as f:
-        config = json.load(f)
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        config_path = Path(sys.executable).parent / 'config.json'
+    else:
+        config_path = Path(ZEN_PATH) / "config.json"
 
-    return config
+    with open(config_path, 'r') as f:
+        return json.load(f)
 
 
 def _get_converter(app_name):
