@@ -373,11 +373,12 @@ def main(bake_resolution: int, glb_output_path: str, gltfpack: str) -> None:
     with open(gltf_output_path, 'r') as f:
         gltf = json.load(f)
 
-    if 'extensionsUsed' in gltf.keys():
-        gltf['extensionsUsed'].append('KHR_materials_volume')
-    else:
-        gltf['extensionsUsed'] = []
-        gltf['extensionsUsed'].append('KHR_materials_volume')
+    if trans_materials:
+        if 'extensionsUsed' in gltf.keys():
+            gltf['extensionsUsed'].append('KHR_materials_volume')
+        else:
+            gltf['extensionsUsed'] = []
+            gltf['extensionsUsed'].append('KHR_materials_volume')
 
     for material in trans_materials:
         node_principled = get_node_of_type(material.node_tree, 'BSDF_PRINCIPLED')
