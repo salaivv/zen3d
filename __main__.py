@@ -13,19 +13,22 @@ GLTF_PACK = ZEN_PATH / 'tools' / 'gltfpack.exe'
 app = typer.Typer(add_completion=False)
 
 
-def _get_config(app_dir):
-    if not os.path.exists(app_dir):
-        os.mkdir(app_dir)
+def _get_config():
+    # if not os.path.exists(app_dir):
+    #     os.mkdir(app_dir)
 
-    config_path: Path = Path(typer.get_app_dir(APP_NAME)) / "config.json"
-    config = None
+    # config_path: Path = Path(typer.get_app_dir(APP_NAME)) / "config.json"
+    # config = None
 
-    if not config_path.is_file():
-        with open(config_path, "w") as f:
-            json.dump({}, f)
-    else:
-        with open(config_path, "r") as f:
-            config = json.load(f)
+    # if not config_path.is_file():
+    #     with open(config_path, "w") as f:
+    #         json.dump({}, f)
+    # else:
+    #     with open(config_path, "r") as f:
+    #         config = json.load(f)
+
+    with open(Path(ZEN_PATH) / "config.json") as f:
+        config = json.load(f)
 
     return config
 
@@ -61,9 +64,10 @@ def convert(
     Zen3D – Convert 3D models to GLTF/GLB
     """
 
-    app_dir = typer.get_app_dir(APP_NAME)
+    # app_dir = typer.get_app_dir(APP_NAME)
 
-    config = _get_config(app_dir)
+    # config = _get_config(app_dir)
+    config = _get_config()
 
     if input_model.suffix == '.blend':
         start = time.time()
