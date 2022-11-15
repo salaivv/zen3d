@@ -1,10 +1,11 @@
 import os
 import bpy
 import sys
+import json
 import subprocess
 from pprint import pprint
 from pathlib import Path
-from typing import Union
+from typing import Union, List
 from tempfile import TemporaryDirectory
 from collections.abc import Iterator
 from bpy import ops, data, context
@@ -37,7 +38,7 @@ def get_node_of_type(node_tree: ShaderNodeTree, node_type: str) -> ShaderNode:
     return node_of_type
 
 
-def requires_bake(material: Material) -> bool:
+def requires_bake(material: Material) -> tuple[bool, bool]:
     """
     Checks if a given material needs to be baked.
 
@@ -60,15 +61,19 @@ def requires_bake(material: Material) -> bool:
         if node_principled.inputs["Transmission"].default_value > 0:
             is_transmission = True
 
-        if is_plain:
-            return False
+        if is_plain and is_transmission:
+            return False, True
+        elif not is_plain and is_transmission:
+            return True, True
+        elif is_plain and not is_transmission:
+            return False, False
         else:
-            return True
+            return True, False
     else:
-        return False
+        return False, False
 
 
-def get_mesh_objects() -> list[Object]:
+def get_mesh_objects() -> List[Object]:
     mesh_objects = []
     for obj in data.objects:
         if obj.type == 'MESH':
@@ -76,16 +81,25 @@ def get_mesh_objects() -> list[Object]:
     return mesh_objects
 
 
-def get_bake_materials() -> list[Material]:
+def get_bake_materials() -> tuple[List[Material], List[Material]]:
     """
     Get all materials that require baking.
     """
     to_bake = []
+    transmission = []
     for material in data.materials:
         if material.users > 0:
-            if requires_bake(material):
+            if requires_bake(material)[1]:
+                transmission.append(material)
+            if requires_bake(material)[0]:
                 to_bake.append(material)
-    return to_bake
+    return to_bake, transmission
+
+
+def get_thickness(material: Material) -> float:
+    for mesh_object in get_mesh_objects():
+        if material.name in mesh_object.data.materials:
+            return round(min(list(mesh_object.dimensions)), 2)
 
 
 def deselect_nodes_all(node_tree: ShaderNodeTree) -> None:
@@ -111,7 +125,7 @@ def add_bake_node(node_tree: ShaderNodeTree, bake_image: Image) -> ShaderNodeTex
 
 
 def bake_principled_socket(
-    materials: list[Material],
+    materials: List[Material],
     bake_image: Image, bake_dir: str,
     socket_name: str, suffix: str
 ) -> Union[Image, None]:
@@ -198,7 +212,7 @@ def bake_principled_socket(
 
 
 def bake_map(
-    materials: list[Material],
+    materials: List[Material],
     bake_image: Image, bake_dir: str,
     bake_type: str, suffix: str
 ) -> Image:
@@ -242,6 +256,8 @@ def main(bake_resolution: int, glb_output_path: str, gltfpack: str) -> None:
     ops.object.convert(target='MESH')
     ops.object.select_all(action='DESELECT')
 
+    mesh_objects = get_mesh_objects()
+
     # Add a target UV map for baking
     for mesh_obj in mesh_objects:
         # print(f"Adding target UV map to {mesh_obj.name}")
@@ -251,10 +267,17 @@ def main(bake_resolution: int, glb_output_path: str, gltfpack: str) -> None:
         mesh_obj.select_set(True)
         context.view_layer.objects.active = mesh_obj
 
+        if len(mesh_obj.data.materials) == 0:
+            if len(mesh_obj.material_slots) == 0:
+                ops.object.material_slot_add()
+            material = data.materials.new('Material')
+            material.use_nodes = True
+            mesh_obj.material_slots[0].material = material
+
     ops.object.editmode_toggle()  # then switch to edit mode
     ops.mesh.select_all(action='DESELECT')  # ensure nothing is selected
 
-    bake_materials = get_bake_materials()
+    bake_materials, trans_materials = get_bake_materials()[0], get_bake_materials()[1]
 
     # Select parts of the meshes with materials that
     # require baking for unwrapping
@@ -283,14 +306,23 @@ def main(bake_resolution: int, glb_output_path: str, gltfpack: str) -> None:
                                                     bake_dir.name, "Metallic", 'METAL')
     baked_maps["Roughness"] = bake_principled_socket(bake_materials, bake_image,
                                                      bake_dir.name, "Roughness", 'ROUGH')
+    baked_maps["Emission"] = bake_principled_socket(bake_materials, bake_image,
+                                                    bake_dir.name, "Emission", 'EMIT')
+    baked_maps["Alpha"] = bake_principled_socket(bake_materials, bake_image,
+                                                 bake_dir.name, "Alpha", 'OPACITY')
     baked_maps["Normal"] = bake_map(bake_materials, bake_image,
                                     bake_dir.name, 'NORMAL', 'NORMAL')
-
-    ops.object.mode_set(mode='OBJECT')
 
     for material in bake_materials:
         # Remove all nodes except Principled and Material Output
         node_tree = material.node_tree
+        node_principled = get_node_of_type(node_tree, 'BSDF_PRINCIPLED')
+
+        if node_principled.inputs['Alpha'].links:
+            material.blend_method = 'CLIP'
+        elif node_principled.inputs['Alpha'].default_value < 1:
+            material.blend_method = 'CLIP'
+
         for node in node_tree.nodes:
             if node.type not in ['BSDF_PRINCIPLED', 'OUTPUT_MATERIAL']:
                 node_tree.nodes.remove(node)
@@ -311,32 +343,64 @@ def main(bake_resolution: int, glb_output_path: str, gltfpack: str) -> None:
                     node_tree.links.new(from_socket, to_socket)
 
                     from_socket = node_normal_map.outputs[0]
-                    to_socket = get_node_of_type(node_tree, 'BSDF_PRINCIPLED').inputs[baked_map_name]
+                    to_socket = node_principled.inputs[baked_map_name]
                     node_tree.links.new(from_socket, to_socket)
 
                     continue
                 
                 from_socket = node_image_tex.outputs[0]
-                to_socket = get_node_of_type(node_tree, 'BSDF_PRINCIPLED').inputs[baked_map_name]
+                to_socket = node_principled.inputs[baked_map_name]
                 node_tree.links.new(from_socket, to_socket)
     
     for mesh_obj in mesh_objects:
         uv_layers = mesh_obj.data.uv_layers
         context.view_layer.objects.active = mesh_obj
-        if 'ZenBakeTarget' in (uv_layer.name for uv_layer in uv_layers):
+
+        while True:
             for uv_layer in uv_layers:
                 if uv_layer.name != 'ZenBakeTarget':
                     uv_layer.active = True
                     ops.mesh.uv_texture_remove()
                     # uv_layers.remove(uv_layer)
+            
+            if not len(uv_layers) > 1:
+                break
 
     gltf_output_name = os.path.splitext(Path(glb_output_path).name)[0] + '.gltf'
     gltf_output_path = str(Path(bake_dir.name) / gltf_output_name)
     ops.export_scene.gltf(filepath=gltf_output_path, export_format='GLTF_SEPARATE')
 
+    with open(gltf_output_path, 'r') as f:
+        gltf = json.load(f)
+
+    if 'extensionsUsed' in gltf.keys():
+        gltf['extensionsUsed'].append('KHR_materials_volume')
+    else:
+        gltf['extensionsUsed'] = []
+        gltf['extensionsUsed'].append('KHR_materials_volume')
+
+    for material in trans_materials:
+        node_principled = get_node_of_type(material.node_tree, 'BSDF_PRINCIPLED')
+        for gltf_mat in gltf['materials']:
+            if material.name == gltf_mat['name']:
+                gltf_mat['extensions'] = {
+                    "KHR_materials_transmission": {
+                        "transmissionFactor": node_principled.inputs['Transmission'].default_value
+                    },
+                    "KHR_materials_volume": {
+                        "thicknessFactor": get_thickness(material)
+                    }
+                }
+
+                break
+    
+    with open(gltf_output_path, 'w') as f:
+        json.dump(gltf, f)
+
     subprocess.run([gltfpack, '-i', gltf_output_path, '-o', glb_output_path])
 
-    # ops.wm.save_mainfile(filepath=str(Path(bake_dir) / "test_1.blend"))
+    # ops.wm.save_mainfile(filepath=str(
+    #     Path(glb_output_path).parent / f"{Path(glb_output_path).name}_baked.blend"))
 
 
 if __name__ == "__main__":
