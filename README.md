@@ -29,13 +29,13 @@ Building for other platforms should be pretty straightforward. Check the section
 To convert a model to GLB, just call the command `zen3d` like this:
 
 ```bash
-**zen3d** -i {INPUT_MODEL} -o {OUTPUT_GLB} -r {RESOLUTION}
+zen3d -i {INPUT_MODEL} -o {OUTPUT_GLB} -r {RESOLUTION}
 ```
 
 For example,
 
 ```bash
-**zen3d** -i chair.blend -o chair.glb -r 2048
+zen3d -i chair.blend -o chair.glb -r 2048
 ```
 
 You can call `zen3d --help` to display the help message with command line options:
