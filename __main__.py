@@ -3,13 +3,19 @@ import sys
 import json
 import time
 import typer
+import platform
 import subprocess
 from pathlib import Path
 
 
 APP_NAME = "zen3d"
 ZEN_PATH = Path(os.path.abspath(__file__)).parent
-GLTF_PACK = ZEN_PATH / 'tools' / 'gltfpack.exe'
+GLTF_PACK = None
+
+if platform.system() == 'Windows':
+    GLTF_PACK = ZEN_PATH / 'tools' / 'gltfpack.exe'
+else:
+    GLTF_PACK = ZEN_PATH / 'tools' / 'gltfpack'
 
 app = typer.Typer(add_completion=False)
 
