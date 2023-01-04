@@ -18,7 +18,7 @@ You can find prebuilt binaries for Windows in the [Releases](https://github.com/
 
 Alternatively, add `zen3d` to the path to use it like any other command like tool.
 
-You will have to update the location of the DCC executables in the `config.json` file. 
+You will have to update the location of the DCC executables in the `config.json` file (only Blender 3.3 is supported as of now).
 
 Also, ensure that a compatible graphics card is selected in Blender to speed up the baking process.
 
